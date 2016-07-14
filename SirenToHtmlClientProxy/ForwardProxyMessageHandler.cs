@@ -3,9 +3,13 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web;
+using FormFactory;
+using FormFactory.RazorEngine;
+using Newtonsoft.Json;
 
 namespace SirenToHtmlClientProxy
 {
@@ -44,6 +48,27 @@ namespace SirenToHtmlClientProxy
             var responseMessage = await new HttpClient(proxyClientHandler).SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
             responseMessage.Headers.TransferEncodingChunked = null; //throws an error on calls to WebApi results
             if (request.Method == HttpMethod.Head) responseMessage.Content = null;
+            if (responseMessage.Content != null)
+            {
+                var content = await responseMessage.Content.ReadAsStringAsync();
+                var sirenObject = JsonConvert.DeserializeObject<SirenSharp.Entity>(content);
+                var htmlModel = new List<PropertyVm>();
+                foreach (var property in sirenObject.Properties)
+                {
+                    htmlModel.Add(new PropertyVm(typeof(string), property.Key)
+                    {
+                        Value = property.Value.ToString(),
+                        Readonly = true,
+                        DisplayName = property.Key
+                    });
+                }
+
+                var razorHelper = new FormFactory.RazorEngine.RazorTemplateHtmlHelper();
+                var html = htmlModel.Render(razorHelper).ToString();
+                responseMessage.Content = new StringContent(html, Encoding.Default, "text/html");
+
+            }
+
             return responseMessage;
         }
 
