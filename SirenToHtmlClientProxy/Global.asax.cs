@@ -1,11 +1,7 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Web;
-using System.Web.Http;
-using System.Web.Mvc;
+﻿using System.Web.Http;
 using System.Web.Optimization;
 using System.Web.Routing;
+using Microsoft.Owin.Security.OAuth;
 
 namespace SirenToHtmlClientProxy
 {
@@ -13,11 +9,18 @@ namespace SirenToHtmlClientProxy
     {
         protected void Application_Start()
         {
-            AreaRegistration.RegisterAllAreas();
-            GlobalConfiguration.Configure(WebApiConfig.Register);
-            FilterConfig.RegisterGlobalFilters(GlobalFilters.Filters);
-            RouteConfig.RegisterRoutes(RouteTable.Routes);
-            BundleConfig.RegisterBundles(BundleTable.Bundles);
+            GlobalConfiguration.Configure(config =>
+            {
+                config.MessageHandlers.Clear();
+                config.MessageHandlers.Add(new ForwardProxyMessageHandler());
+
+                config.Routes.MapHttpRoute(
+                    name: "DefaultApi",
+                    routeTemplate: "{*path}",
+                    defaults: new {controller = "Non", id = RouteParameter.Optional}
+                    );
+            });
         }
     }
 }
+
