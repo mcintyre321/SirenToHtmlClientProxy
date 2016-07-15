@@ -13,7 +13,8 @@ namespace SirenToHtmlClientProxy
             {
                 config.MessageHandlers.Clear();
                 config.MessageHandlers.Add(new ForwardProxyMessageHandler());
-
+                config.IncludeErrorDetailPolicy = IncludeErrorDetailPolicy.Always;
+                ;
                 config.Routes.MapHttpRoute(
                     name: "DefaultApi",
                     routeTemplate: "{*path}",
