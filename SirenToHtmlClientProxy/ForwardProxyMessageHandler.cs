@@ -43,7 +43,7 @@ namespace SirenToHtmlClientProxy
 
             Func<string, string> sanitiseUrls = s => s.Replace(first.ToString(), "/");
 
-            var uri = new UriBuilder(first + request.RequestUri.PathAndQuery);
+            var uri = new UriBuilder(first.ToString().TrimEnd('/') + '/' + request.RequestUri.PathAndQuery.TrimStart('/'));
 
             uri.Host = first.Host;
             uri.Port = first.Port;
@@ -60,59 +60,66 @@ namespace SirenToHtmlClientProxy
             var qs = request.RequestUri.ParseQueryString();
 
             var methodOverride = qs["_method"];
+            
+            
             if (methodOverride != null)
             {
                 request.Method = new HttpMethod(methodOverride);
-                request.RequestUri = new Uri(uri.ToString().Replace("_method=" + methodOverride, ""));
+                qs.Remove("_method");
             }
 
-            var responseMessage =
-                await
-                    new HttpClient().SendAsync(request, HttpCompletionOption.ResponseHeadersRead,
-                        cancellationToken);
+            uri.Query = qs.ToString();
+            request.RequestUri = new Uri(uri.ToString());
 
-            responseMessage.Headers.TransferEncodingChunked = null; //throws an error on calls to WebApi results
-            if (responseMessage.StatusCode == HttpStatusCode.NotModified) return responseMessage;
-            if (request.Method == HttpMethod.Head) responseMessage.Content = null;
-            if (responseMessage.Content != null)
+            using (var httpClient = new HttpClient())
             {
-                try
+                var responseMessage =
+                    await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+
+                responseMessage.Headers.TransferEncodingChunked = null; //throws an error on calls to WebApi results
+                if (responseMessage.StatusCode == HttpStatusCode.NotModified) return responseMessage;
+                if (request.Method == HttpMethod.Head) responseMessage.Content = null;
+                if (responseMessage.Content != null)
                 {
-                    if (request.Method == HttpMethod.Post)
+                    try
                     {
-                        if (responseMessage.StatusCode == HttpStatusCode.Created
-                            || responseMessage.StatusCode == HttpStatusCode.Accepted)
+                        if (request.Method == HttpMethod.Post)
                         {
-                            if (responseMessage.Headers.Location != null)
+                            if (responseMessage.StatusCode == HttpStatusCode.Created
+                                || responseMessage.StatusCode == HttpStatusCode.Accepted)
                             {
-                                var redirectMessage = request.CreateResponse(HttpStatusCode.Moved);
-                                redirectMessage.Headers.Location =
-                                    new Uri(sanitiseUrls(responseMessage.Headers.Location.ToString()), UriKind.Relative);
-                                return redirectMessage;
+                                if (responseMessage.Headers.Location != null)
+                                {
+                                    var redirectMessage = request.CreateResponse(HttpStatusCode.Moved);
+                                    redirectMessage.Headers.Location =
+                                        new Uri(sanitiseUrls(responseMessage.Headers.Location.ToString()),
+                                            UriKind.Relative);
+                                    return redirectMessage;
+                                }
+                            }
+                            if (responseMessage.StatusCode == HttpStatusCode.OK)
+                            {
+                                //fall through to get handler
+                            }
+                            else
+                            {
+                                throw new NotImplementedException();
                             }
                         }
-                        if (responseMessage.StatusCode == HttpStatusCode.OK)
-                        {
-                            //fall through to get handler
-                        }
-                        else
-                        {
-                            throw new NotImplementedException();
-                        }
+                        var content = await responseMessage.Content.ReadAsStringAsync();
+                        var htmls = ReadSirenAndConvertToForm(sanitiseUrls(content));
+                        var stringContent = new StringContent(htmls, Encoding.Default, "text/html");
+                        responseMessage.Content = stringContent;
                     }
-                    var content = await responseMessage.Content.ReadAsStringAsync();
-                    var htmls = ReadSirenAndConvertToForm(sanitiseUrls(content));
-                    var stringContent = new StringContent(htmls, Encoding.Default, "text/html");
-                    responseMessage.Content = stringContent;
-                }
-                catch (Exception ex)
-                {
-                    responseMessage.Content =
-                        new StringContent(request.RequestUri.ToString() + request.Headers.ToString() + ex.ToString());
-                }
-            }
+                    catch (Exception ex)
+                    {
+                        responseMessage.Content =
+                            new StringContent(request.RequestUri.ToString() + request.Headers.ToString() + ex.ToString());
+                    }
 
-            return responseMessage;
+                }
+                return responseMessage;
+            }
         }
 
         private static string ReadSirenAndConvertToForm(string content)
@@ -202,7 +209,7 @@ namespace SirenToHtmlClientProxy
                 Inputs = action.Fields?.Select(field => new PropertyVm(typeof(string), field.Name) {DisplayName = field.Name})?.ToArray() ?? Enumerable.Empty<PropertyVm>()
             };
 
-            if (form.Method != "GET" && form.Method != "post")
+            if (form.Method != "get" && form.Method != "post")
             {
                 form.ActionUrl += form.ActionUrl.Contains("?") ? "&" : "?";
                 form.ActionUrl += "_method=" + form.Method.ToString().ToUpper();
