@@ -106,10 +106,13 @@ namespace SirenToHtmlClientProxy
                                 throw new NotImplementedException();
                             }
                         }
-                        var content = await responseMessage.Content.ReadAsStringAsync();
-                        var htmls = ReadSirenAndConvertToForm(sanitiseUrls(content));
-                        var stringContent = new StringContent(htmls, Encoding.Default, "text/html");
-                        responseMessage.Content = stringContent;
+                        if (responseMessage.Content.Headers.ContentType.MediaType == "application/vnd.siren+json")
+                        {
+                            var content = await responseMessage.Content.ReadAsStringAsync();
+                            var htmls = ReadSirenAndConvertToForm(sanitiseUrls(content));
+                            var stringContent = new StringContent(htmls, Encoding.Default, "text/html");
+                            responseMessage.Content = stringContent;
+                        }
                     }
                     catch (Exception ex)
                     {
