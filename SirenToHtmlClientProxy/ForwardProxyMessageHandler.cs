@@ -70,8 +70,13 @@ namespace SirenToHtmlClientProxy
 
             uri.Query = qs.ToString();
             request.RequestUri = new Uri(uri.ToString());
+            var httpMessageHandler = new HttpClientHandler
+            {
+                Proxy = new WebProxy("http://localhost:8888".Replace("localhost", Environment.MachineName)),
+                UseProxy = true
+            };
 
-            using (var httpClient = new HttpClient())
+            using (var httpClient = new HttpClient(httpMessageHandler))
             {
                 var responseMessage =
                     await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
