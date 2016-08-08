@@ -16,8 +16,8 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using OneOf;
 using RazorEngine.Text;
-using SirenSharp;
-using Action = SirenSharp.Action;
+using SirenDotNet;
+using Action = SirenDotNet.Action;
 using Exception = System.Exception;
 
 namespace SirenToHtmlClientProxy
@@ -34,7 +34,7 @@ namespace SirenToHtmlClientProxy
             if (!request.Headers.TryGetValues("X-Destination", out destinations))
             {
                 return request.CreateErrorResponse(HttpStatusCode.BadRequest,
-                    "Please add an X-Destination header e.g. firstproxy:80, secondproxy:8080 endwarehost:80");
+                    "Please add an X-Destination header e.g. http://firstproxy:80, http://secondproxy:8080 endwarehost:80");
             }
 
             if (request.Method == HttpMethod.Get || request.Method == HttpMethod.Trace) request.Content = null;
@@ -132,11 +132,11 @@ namespace SirenToHtmlClientProxy
 
         private static string ReadSirenAndConvertToForm(string content)
         {
-            var entity = JsonConvert.DeserializeObject<SirenSharp.Entity>(content);
+            var entity = JsonConvert.DeserializeObject<SirenDotNet.Entity>(content);
             var list = new List<OneOf<PropertyVm, FormVm>>();
 
             entity.Links?.Select(BuildPropertyVmFromLink).ToList().ForEach(x => list.Add(x));
-            entity.Properties?.Select(PropertyVmFromJToken).ToList().ForEach(x => list.Add(x));
+            entity.Properties = entity.Properties;
             entity.Actions?.Select(BuildFormVmFromAction).ToList().ForEach(x => list.Add(x));
             entity.Entities?.Select(BuildPropertyVmFromSubEntity).ToList().ForEach(x => list.AddRange(x));
 
@@ -163,31 +163,36 @@ namespace SirenToHtmlClientProxy
         }
 
         private static IEnumerable<OneOf<PropertyVm, FormVm>> BuildPropertyVmFromSubEntity(
-            OneOf<SubEntity, SubEntityLink> e)
+            SubEntity e)
         {
-            return e.Match(
-                subEntity =>
-                {
-                    var list = new List<OneOf<PropertyVm, FormVm>>();
-                    subEntity.Links?.Select(BuildPropertyVmFromLink).ToList().ForEach(x => list.Add(x));
-                    subEntity.Properties?.Select(PropertyVmFromJToken).ToList().ForEach(x => list.Add(x));
-                    subEntity.Actions?.Select(BuildFormVmFromAction).ToList().ForEach(x => list.Add(x));
-                    subEntity.Entities?.Select(BuildPropertyVmFromSubEntity).ToList().ForEach(x => list.AddRange(x));
-                    return list.AsEnumerable();
-                },
-                subEntity => Enumerable.Empty<OneOf<PropertyVm, FormVm>>().AsEnumerable()
-            );
+            var list = new List<OneOf<PropertyVm, FormVm>>();
+
+            var embedded = e as SubEntity.Embedded;
+            if (embedded != null)
+            {
+                embedded.Links?.Select(BuildPropertyVmFromLink).ToList().ForEach(x => list.Add(x));
+                embedded.Properties?.Properties()
+                    .Select(p => PropertyVmFromJToken(p))
+                    .ToList()
+                    .ForEach(x => list.Add(x));
+                embedded.Actions?.Select(BuildFormVmFromAction).ToList().ForEach(x => list.Add(x));
+                embedded.Entities?.Select(BuildPropertyVmFromSubEntity).ToList().ForEach(x => list.AddRange(x));
+                return list.AsEnumerable();
+            }
+            var linked = (SubEntity.Linked) e;
+            //not implemented
+            return list;
         }
 
-        private static PropertyVm PropertyVmFromJToken(KeyValuePair<string, JToken> property)
+        private static PropertyVm PropertyVmFromJToken(JProperty property)
         {
-            var propertyVm = new PropertyVm(typeof(string), property.Key)
+            var propertyVm = new PropertyVm(typeof(string), property.Name)
             {
                 Value = property.Value.ToString(),
                 Readonly = true,
-                DisplayName = property.Key
+                DisplayName = property.Name
             };
-            propertyVm.GetCustomAttributes = () => new object[] {new DataTypeAttribute(DataType.MultilineText)};
+            //propertyVm.GetCustomAttributes = () => new object[] {new DataTypeAttribute(DataType.MultilineText)};
             return propertyVm;
         }
 
