@@ -34,7 +34,7 @@ namespace SirenToHtmlClientProxy
             if (!request.Headers.TryGetValues("X-Destination", out destinations))
             {
                 return request.CreateErrorResponse(HttpStatusCode.BadRequest,
-                    "Please add an X-Destination header e.g. http://firstproxy:80, http://secondproxy:8080 endwarehost:80");
+                    "Please add an X-Destination header e.g. http://firstproxy, http://secondproxy http://endwarehost");
             }
 
             if (request.Method == HttpMethod.Get || request.Method == HttpMethod.Trace) request.Content = null;
