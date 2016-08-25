@@ -11,6 +11,7 @@ using System.Threading.Tasks;
 using System.Web;
 using System.Xml.Linq;
 using FormFactory;
+using FormFactory.Attributes;
 using FormFactory.RazorEngine;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -115,6 +116,7 @@ namespace SirenToHtmlClientProxy
                         {
                             var content = await responseMessage.Content.ReadAsStringAsync();
                             var htmls = ReadSirenAndConvertToForm(sanitiseUrls(content));
+                            htmls += "<style>textarea{width:100%}</style>";
                             var stringContent = new StringContent(htmls, Encoding.Default, "text/html");
                             responseMessage.Content = stringContent;
                         }
@@ -132,13 +134,10 @@ namespace SirenToHtmlClientProxy
 
         private static string ReadSirenAndConvertToForm(string content)
         {
-            var entity = JsonConvert.DeserializeObject<SirenDotNet.Entity>(content);
+            var jo = JObject.Parse(content);
+            var entity = jo.ToObject<SirenDotNet.Entity>();
             var list = new List<OneOf<PropertyVm, FormVm>>();
-
-            entity.Links?.Select(BuildPropertyVmFromLink).ToList().ForEach(x => list.Add(x));
-            entity.Properties = entity.Properties;
-            entity.Actions?.Select(BuildFormVmFromAction).ToList().ForEach(x => list.Add(x));
-            entity.Entities?.Select(BuildPropertyVmFromSubEntity).ToList().ForEach(x => list.AddRange(x));
+            list.AddRange(BuildComponentsForEntity(jo, entity));
 
             var razorHelper = new FormFactory.RazorEngine.RazorTemplateHtmlHelper();
             var elements = list
@@ -154,12 +153,35 @@ namespace SirenToHtmlClientProxy
                 Readonly = true,
                 DisplayName = "Siren Response",
                 GetCustomAttributes =  () => new object[] { new DataTypeAttribute(DataType.MultilineText) },
+                
                 Value = JToken.Parse(content).ToString(Formatting.Indented)
             };
 
             elements.Add(sirenElement.Render(razorHelper));
 
             return string.Join("", elements.Select(htmlStr => htmlStr.ToString()));
+        }
+
+        private static IEnumerable<OneOf<PropertyVm, FormVm>> BuildComponentsForEntity(JObject jo, Entity entity)
+        {
+            var list = new List<OneOf<PropertyVm, FormVm>>();
+            var title = jo.GetValue("title")?.Value<string>();
+            
+            if (!string.IsNullOrWhiteSpace(title))
+            {
+                list.Add(new PropertyVm(typeof(XElement), "title")                {
+                    Value = new XElement("h1", title),
+                    Readonly = true,
+                    DisplayName = "Title"
+                });
+            }
+ 
+            entity.Links?.Select(BuildPropertyVmFromLink).ToList().ForEach(x => list.Add(x)); ;
+            entity.Actions?.Select(BuildFormVmFromAction).ToList().ForEach(x => list.Add(x)); ;
+            entity.Entities?.Select(BuildPropertyVmFromSubEntity).ToList().ForEach(x => list.AddRange(x)); ; ;
+            entity.Properties?.Properties().Select(PropertyVmFromJToken).ToList().ForEach(p => list.Add(p));
+            return list;
+
         }
 
         private static IEnumerable<OneOf<PropertyVm, FormVm>> BuildPropertyVmFromSubEntity(
@@ -172,7 +194,7 @@ namespace SirenToHtmlClientProxy
             {
                 embedded.Links?.Select(BuildPropertyVmFromLink).ToList().ForEach(x => list.Add(x));
                 embedded.Properties?.Properties()
-                    .Select(p => PropertyVmFromJToken(p))
+                    .Select(PropertyVmFromJToken)
                     .ToList()
                     .ForEach(x => list.Add(x));
                 embedded.Actions?.Select(BuildFormVmFromAction).ToList().ForEach(x => list.Add(x));
@@ -180,39 +202,51 @@ namespace SirenToHtmlClientProxy
                 return list.AsEnumerable();
             }
             var linked = (SubEntity.Linked) e;
+            if (linked != null)
+            {
+                var xElement = new XElement("a", linked.Title ?? linked.Href.ToString());
+                xElement.SetAttributeValue("href", linked.Href.ToString());
+                return new OneOf < PropertyVm, FormVm >[] {new PropertyVm(typeof(XElement), Guid.NewGuid().ToString())
+                {
+                    Value = xElement
+                }};
+            }
             //not implemented
             return list;
         }
 
-        private static PropertyVm PropertyVmFromJToken(JProperty property)
+        private static OneOf<PropertyVm, FormVm> PropertyVmFromJToken(JProperty property)
         {
             var propertyVm = new PropertyVm(typeof(string), property.Name)
             {
                 Value = property.Value.ToString(),
                 Readonly = true,
-                DisplayName = property.Name
+                DisplayName = property.Name,
+                
             };
             //propertyVm.GetCustomAttributes = () => new object[] {new DataTypeAttribute(DataType.MultilineText)};
             return propertyVm;
         }
 
-        private static PropertyVm BuildPropertyVmFromLink(Link link)
+        private static OneOf<PropertyVm, FormVm> BuildPropertyVmFromLink(Link link)
         {
             var element = new XElement("a", new XAttribute("href", link.Href));
-            var name = string.Join(", ", link.Rel);
-
-            element.Value = name;
-            var propertyVm = new PropertyVm(typeof(XElement), name)
+            
+            var rels = string.Join(", ", link.Rel);
+            element.SetAttributeValue("title", rels);
+            element.Value = link.Title ?? rels;
+            var propertyVm = new PropertyVm(typeof(XElement), rels)
             {
                 Value = element,
                 Readonly = true,
-                DisplayName = name,
-                Name = name
+                DisplayName = rels,
+                Name = rels,
+                GetCustomAttributes = () => new object[]{ new NoLabelAttribute()}
             };
             return propertyVm;
         }
 
-        private static FormVm BuildFormVmFromAction(Action action)
+        private static OneOf<PropertyVm, FormVm> BuildFormVmFromAction(Action action)
         {
             var form = new FormVm
             {
