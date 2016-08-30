@@ -73,9 +73,9 @@
       <HintPath>..\packages\RazorEngine.3.4.1\lib\net45\RazorEngine.dll</HintPath>
       <Private>True</Private>
     </Reference>
-    <Reference Include="SirenDotNet, Version=1.1.29.0, Culture=neutral, processorArchitecture=MSIL">
-      <SpecificVersion>False</SpecificVersion>
-      <HintPath>..\..\SirenSharp\SirenDotNet\bin\Debug\SirenDotNet.dll</HintPath>
+    <Reference Include="SirenDotNet, Version=1.1.31.0, Culture=neutral, processorArchitecture=MSIL">
+      <HintPath>..\packages\SirenDotNet.1.1.31\lib\portable45-net45+win8+wp8+wpa81\SirenDotNet.dll</HintPath>
+      <Private>True</Private>
     </Reference>
     <Reference Include="System" />
     <Reference Include="System.Data" />
