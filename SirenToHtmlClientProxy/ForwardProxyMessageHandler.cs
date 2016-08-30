@@ -112,7 +112,7 @@ namespace SirenToHtmlClientProxy
                                 throw new NotImplementedException();
                             }
                         }
-                        if (responseMessage.Content.Headers.ContentType.MediaType == "application/vnd.siren+json")
+                        if (responseMessage.Content?.Headers?.ContentType?.MediaType == "application/vnd.siren+json")
                         {
                             var content = await responseMessage.Content.ReadAsStringAsync();
                             var htmls = ReadSirenAndConvertToForm(sanitiseUrls(content));
@@ -137,7 +137,7 @@ namespace SirenToHtmlClientProxy
             var jo = JObject.Parse(content);
             var entity = jo.ToObject<SirenDotNet.Entity>();
             var list = new List<OneOf<PropertyVm, FormVm>>();
-            list.AddRange(BuildComponentsForEntity(jo, entity));
+            list.AddRange(BuildComponentsForEntity(entity, 1));
 
             var razorHelper = new FormFactory.RazorEngine.RazorTemplateHtmlHelper();
             var elements = list
@@ -162,43 +162,55 @@ namespace SirenToHtmlClientProxy
             return string.Join("", elements.Select(htmlStr => htmlStr.ToString()));
         }
 
-        private static IEnumerable<OneOf<PropertyVm, FormVm>> BuildComponentsForEntity(JObject jo, Entity entity)
+        private static IEnumerable<OneOf<PropertyVm, FormVm>> BuildComponentsForEntity(Entity entity, int depth)
         {
             var list = new List<OneOf<PropertyVm, FormVm>>();
-            var title = jo.GetValue("title")?.Value<string>();
             
-            if (!string.IsNullOrWhiteSpace(title))
+            if (entity.Title != null)
             {
-                list.Add(new PropertyVm(typeof(XElement), "title")                {
-                    Value = new XElement("h1", title),
+                var propertyVm = new PropertyVm(typeof(XElement), "title")                {
+                    Value = new XElement("h" + depth, entity.Title),
                     Readonly = true,
                     DisplayName = "Title"
-                });
+                };
+
+                list.Add(propertyVm);
             }
- 
+
             entity.Links?.Select(BuildPropertyVmFromLink).ToList().ForEach(x => list.Add(x)); ;
             entity.Actions?.Select(BuildFormVmFromAction).ToList().ForEach(x => list.Add(x)); ;
-            entity.Entities?.Select(BuildPropertyVmFromSubEntity).ToList().ForEach(x => list.AddRange(x)); ; ;
+            entity.Entities?.Select(e => BuildPropertyVmFromSubEntity(e, depth++)).ToList().ForEach(x => list.AddRange(x)); ; ;
             entity.Properties?.Properties().Select(PropertyVmFromJToken).ToList().ForEach(p => list.Add(p));
             return list;
 
         }
 
-        private static IEnumerable<OneOf<PropertyVm, FormVm>> BuildPropertyVmFromSubEntity(
-            SubEntity e)
+        private static IEnumerable<OneOf<PropertyVm, FormVm>> BuildPropertyVmFromSubEntity(SubEntity e, int depth)
         {
             var list = new List<OneOf<PropertyVm, FormVm>>();
 
             var embedded = e as SubEntity.Embedded;
             if (embedded != null)
             {
+                if (embedded.Title != null)
+                {
+                    var propertyVm = new PropertyVm(typeof(XElement), "title")
+                    {
+                        Value = new XElement("h" + depth, embedded.Title),
+                        Readonly = true,
+                        DisplayName = "Title"
+                    };
+
+                    list.Add(propertyVm);
+                }
+
                 embedded.Links?.Select(BuildPropertyVmFromLink).ToList().ForEach(x => list.Add(x));
                 embedded.Properties?.Properties()
                     .Select(PropertyVmFromJToken)
                     .ToList()
                     .ForEach(x => list.Add(x));
                 embedded.Actions?.Select(BuildFormVmFromAction).ToList().ForEach(x => list.Add(x));
-                embedded.Entities?.Select(BuildPropertyVmFromSubEntity).ToList().ForEach(x => list.AddRange(x));
+                embedded.Entities?.Select(e1 => BuildPropertyVmFromSubEntity(e1, depth)).ToList().ForEach(x => list.AddRange(x));
                 return list.AsEnumerable();
             }
             var linked = (SubEntity.Linked) e;
@@ -206,7 +218,7 @@ namespace SirenToHtmlClientProxy
             {
                 var xElement = new XElement("a", linked.Title ?? linked.Href.ToString());
                 xElement.SetAttributeValue("href", linked.Href.ToString());
-                return new OneOf < PropertyVm, FormVm >[] {new PropertyVm(typeof(XElement), Guid.NewGuid().ToString())
+                return new OneOf<PropertyVm, FormVm>[] {new PropertyVm(typeof(XElement), Guid.NewGuid().ToString())
                 {
                     Value = xElement
                 }};
@@ -253,7 +265,8 @@ namespace SirenToHtmlClientProxy
                 ActionUrl = action.Href.ToString(),
                 DisplayName = action.Title ?? action.Name ?? "link",
                 Method = action?.Method.ToString().ToLower(),
-                Inputs = action.Fields?.Select(field => new PropertyVm(typeof(string), field.Name) {DisplayName = field.Name})?.ToArray() ?? Enumerable.Empty<PropertyVm>()
+                Inputs = action.Fields?.Select(field => new PropertyVm(typeof(string), field.Name) {DisplayName = field.Name})?.ToArray() ?? Enumerable.Empty<PropertyVm>(),
+                
             };
 
             if (form.Method != "get" && form.Method != "post")
