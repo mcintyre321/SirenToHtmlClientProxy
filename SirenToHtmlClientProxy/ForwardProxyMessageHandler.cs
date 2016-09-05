@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -10,6 +11,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Web;
 using System.Xml.Linq;
+using CsQuery;
 using FormFactory;
 using FormFactory.Attributes;
 using FormFactory.RazorEngine;
@@ -61,8 +63,8 @@ namespace SirenToHtmlClientProxy
             var qs = request.RequestUri.ParseQueryString();
 
             var methodOverride = qs["_method"];
-            
-            
+
+
             if (methodOverride != null)
             {
                 request.Method = new HttpMethod(methodOverride);
@@ -71,17 +73,28 @@ namespace SirenToHtmlClientProxy
 
             uri.Query = qs.ToString();
             request.RequestUri = new Uri(uri.ToString());
-            //var httpMessageHandler = new HttpClientHandler
-            //{
-            //    Proxy = new WebProxy("http://localhost:8888".Replace("localhost", Environment.MachineName)),
-            //    UseProxy = true
-            //};
+            if (request.Content != null) await request.Content.LoadIntoBufferAsync();
+ 
+            List<string> httpLog = new List<string>();
 
             using (var httpClient = new HttpClient())
             {
-                var responseMessage =
-                    await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
 
+                var requestInitialContent = request.Content;
+                if (requestInitialContent != null)
+                {
+                    await requestInitialContent.LoadIntoBufferAsync();
+                    var requestContentStream = await requestInitialContent.ReadAsStreamAsync();
+                    request.Content = new StreamContent(requestContentStream);
+                    requestInitialContent.Headers.ToList()
+                        .ForEach(kvp => request.Content.Headers.TryAddWithoutValidation(kvp.Key, kvp.Value));
+                }
+
+                var responseMessage = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+                request.Content = requestInitialContent;
+                
+                httpLog.Add(ToString(request));
+                httpLog.Add(ToString(responseMessage));
                 responseMessage.Headers.TransferEncodingChunked = null; //throws an error on calls to WebApi results
                 if (responseMessage.StatusCode == HttpStatusCode.NotModified) return responseMessage;
                 if (request.Method == HttpMethod.Head) responseMessage.Content = null;
@@ -115,9 +128,11 @@ namespace SirenToHtmlClientProxy
                         if (responseMessage.Content?.Headers?.ContentType?.MediaType == "application/vnd.siren+json")
                         {
                             var content = await responseMessage.Content.ReadAsStringAsync();
-                            var htmls = ReadSirenAndConvertToForm(sanitiseUrls(content));
-                            htmls += "<style>textarea{width:100%}</style>";
-                            var stringContent = new StringContent(htmls, Encoding.Default, "text/html");
+
+                            var html = ReadSirenAndConvertToForm(sanitiseUrls(content));
+                            html = SplitContainer(html, string.Join(Environment.NewLine,httpLog));
+                             
+                            var stringContent = new StringContent(html, Encoding.Default, "text/html");
                             responseMessage.Content = stringContent;
                         }
                     }
@@ -132,62 +147,44 @@ namespace SirenToHtmlClientProxy
             }
         }
 
+   
+
         private static string ReadSirenAndConvertToForm(string content)
         {
             var jo = JObject.Parse(content);
             var entity = jo.ToObject<SirenDotNet.Entity>();
-            var list = new List<OneOf<PropertyVm, FormVm>>();
-            list.AddRange(BuildComponentsForEntity(entity, 1));
-
-            var razorHelper = new FormFactory.RazorEngine.RazorTemplateHtmlHelper();
-            var elements = list
-                .Select(x => x.Match(
-                    propertyVm => propertyVm.Render(razorHelper),
-                    formVm => ((FormVm) formVm).Render(razorHelper)
-                    )
-                ).ToList();
-
-
-            var sirenElement = new PropertyVm(typeof(string), "_response")
-            {
-                Readonly = true,
-                DisplayName = "Siren Response",
-                GetCustomAttributes =  () => new object[] { new DataTypeAttribute(DataType.MultilineText) },
-                
-                Value = JToken.Parse(content).ToString(Formatting.Indented)
-            };
-
-            elements.Add(sirenElement.Render(razorHelper));
-
-            return string.Join("", elements.Select(htmlStr => htmlStr.ToString()));
+            return BuildComponentsForEntity(entity, 1);
         }
 
-        private static IEnumerable<OneOf<PropertyVm, FormVm>> BuildComponentsForEntity(Entity entity, int depth)
+        private static string BuildComponentsForEntity(Entity entity, int depth)
         {
-            var list = new List<OneOf<PropertyVm, FormVm>>();
+
             
+            var list = new List<string>();
+
             if (entity.Title != null)
             {
-                var propertyVm = new PropertyVm(typeof(XElement), "title")                {
-                    Value = new XElement("h" + depth, entity.Title),
-                    Readonly = true,
-                    DisplayName = "Title"
-                };
-
-                list.Add(propertyVm);
+                list.Add($"<h{depth}>{entity.Title}</h{depth}>");
             }
 
-            entity.Links?.Select(BuildPropertyVmFromLink).ToList().ForEach(x => list.Add(x)); ;
-            entity.Actions?.Select(BuildFormVmFromAction).ToList().ForEach(x => list.Add(x)); ;
-            entity.Entities?.Select(e => BuildPropertyVmFromSubEntity(e, depth++)).ToList().ForEach(x => list.AddRange(x)); ; ;
-            entity.Properties?.Properties().Select(PropertyVmFromJToken).ToList().ForEach(p => list.Add(p));
-            return list;
+            list.AddRange(entity.Links?.Select(x => BuildPropertyVmFromLink(x).Render(new RazorTemplateHtmlHelper()).ToString()) ?? new List<string>());
+           
+            list.AddRange(entity.Entities?.Select(e => BuildPropertyVmFromSubEntity(e, depth++))
+                .Select(entityPropertiesHtml => string.Join(Environment.NewLine, entityPropertiesHtml))
+                .Select(entityHtml => CsQuery.CQ.Create("<div>").Html(entityHtml).AddClass("subentity").AddClass("depth" + depth).Render())
+                .ToList() ?? new List<string>())
+                
+            ;
+            ;
+            entity.Properties?.Properties().Select(PropertyVmFromJToken).ToList().ForEach(p => list.Add(p.Render(new RazorTemplateHtmlHelper()).ToString()));
+            entity.Actions?.Select(BuildFormVmFromAction).ToList().ForEach(x => list.Add(x.Render(new RazorTemplateHtmlHelper()).ToString()));
+            return CQ.Create("<div>").Html(string.Join(Environment.NewLine, list)).AddClass("entity").AddClass("depth" + depth).Render();
 
         }
 
-        private static IEnumerable<OneOf<PropertyVm, FormVm>> BuildPropertyVmFromSubEntity(SubEntity e, int depth)
+        private static IEnumerable<string> BuildPropertyVmFromSubEntity(SubEntity e, int depth)
         {
-            var list = new List<OneOf<PropertyVm, FormVm>>();
+            var list = new List<string>();
 
             var embedded = e as SubEntity.Embedded;
             if (embedded != null)
@@ -201,49 +198,59 @@ namespace SirenToHtmlClientProxy
                         DisplayName = "Title"
                     };
 
-                    list.Add(propertyVm);
+                    list.Add(propertyVm.Render(new RazorTemplateHtmlHelper()).ToString());
                 }
 
-                embedded.Links?.Select(BuildPropertyVmFromLink).ToList().ForEach(x => list.Add(x));
+                embedded.Links?.Select(BuildPropertyVmFromLink).ToList().ForEach(x => list.Add(x.Render(new RazorTemplateHtmlHelper()).ToString()));
                 embedded.Properties?.Properties()
                     .Select(PropertyVmFromJToken)
                     .ToList()
-                    .ForEach(x => list.Add(x));
-                embedded.Actions?.Select(BuildFormVmFromAction).ToList().ForEach(x => list.Add(x));
-                embedded.Entities?.Select(e1 => BuildPropertyVmFromSubEntity(e1, depth)).ToList().ForEach(x => list.AddRange(x));
+                    .ForEach(x => list.Add(x.Render(new RazorTemplateHtmlHelper()).ToString()));
+                embedded.Actions?.Select(BuildFormVmFromAction).ToList().ForEach(x => list.Add(x.Render(new RazorTemplateHtmlHelper()).ToString()));
+
+
+                list.AddRange(embedded.Entities?.Select(e1 => BuildPropertyVmFromSubEntity(e1, depth++))
+                    .Select(entityPropertiesHtml => string.Join(Environment.NewLine, entityPropertiesHtml))
+                    .Select(
+                        entityHtml =>
+                            CsQuery.CQ.Create("<div>")
+                                .Html(entityHtml)
+                                .AddClass("entity")
+                                .AddClass("depth" + depth)
+                                .Render())
+                    .ToList() ?? new List<string>());
+
                 return list.AsEnumerable();
             }
             var linked = (SubEntity.Linked) e;
             if (linked != null)
             {
-                var xElement = new XElement("a", linked.Title ?? linked.Href.ToString());
-                xElement.SetAttributeValue("href", linked.Href.ToString());
-                return new OneOf<PropertyVm, FormVm>[] {new PropertyVm(typeof(XElement), Guid.NewGuid().ToString())
+                return new[]
                 {
-                    Value = xElement
-                }};
+                    $"<a href='{linked.Href}'>{linked.Title ?? linked.Href.ToString()}</a>"
+                };
             }
             //not implemented
             return list;
         }
 
-        private static OneOf<PropertyVm, FormVm> PropertyVmFromJToken(JProperty property)
+        private static PropertyVm PropertyVmFromJToken(JProperty property)
         {
             var propertyVm = new PropertyVm(typeof(string), property.Name)
             {
                 Value = property.Value.ToString(),
                 Readonly = true,
                 DisplayName = property.Name,
-                
+
             };
             //propertyVm.GetCustomAttributes = () => new object[] {new DataTypeAttribute(DataType.MultilineText)};
             return propertyVm;
         }
 
-        private static OneOf<PropertyVm, FormVm> BuildPropertyVmFromLink(Link link)
+        private static PropertyVm BuildPropertyVmFromLink(Link link)
         {
             var element = new XElement("a", new XAttribute("href", link.Href));
-            
+
             var rels = string.Join(", ", link.Rel);
             element.SetAttributeValue("title", rels);
             element.Value = link.Title ?? rels;
@@ -253,20 +260,46 @@ namespace SirenToHtmlClientProxy
                 Readonly = true,
                 DisplayName = rels,
                 Name = rels,
-                GetCustomAttributes = () => new object[]{ new NoLabelAttribute()}
+                GetCustomAttributes = () => new object[] {new NoLabelAttribute()}
             };
             return propertyVm;
         }
 
-        private static OneOf<PropertyVm, FormVm> BuildFormVmFromAction(Action action)
+        private static string ToString(HttpRequestMessage req)
+        {
+            return CsQuery.CQ.Create("<pre>").Text($"{req.Method} {req.RequestUri}\r\n" +
+                   req.Headers.ToString() +
+                   req.Content?.Headers.ToString() +
+                   FormatIfJson(req.Content)).AddClass("request").Render();
+        }
+        private string ToString(HttpResponseMessage resp)
+        {
+            return CsQuery.CQ.Create("<pre>").Text($"{(int)resp.StatusCode} {resp.StatusCode}\r\n" +
+                   resp.Headers.ToString() +
+                   resp.Content?.Headers.ToString() +
+                   FormatIfJson(resp.Content)).AddClass("response").AddClass("status" + (int)resp.StatusCode).Render();
+        }
+        private static string FormatIfJson(HttpContent content)
+        {
+            var mediaType = content?.Headers?.ContentType?.MediaType;
+            if (mediaType == "application/json" || mediaType == "application/vnd.siren+json")
+            {
+                return JToken.Parse(content.ReadAsStringAsync().Result).ToString(Formatting.Indented);
+            }
+            return content?.ReadAsStringAsync().Result;
+        }
+
+        private static FormVm BuildFormVmFromAction(Action action)
         {
             var form = new FormVm
             {
                 ActionUrl = action.Href.ToString(),
                 DisplayName = action.Title ?? action.Name ?? "link",
                 Method = action?.Method.ToString().ToLower(),
-                Inputs = action.Fields?.Select(field => new PropertyVm(typeof(string), field.Name) {DisplayName = field.Name})?.ToArray() ?? Enumerable.Empty<PropertyVm>(),
-                
+                Inputs =
+                    action.Fields?.Select(field => new PropertyVm(typeof(string), field.Name) {DisplayName = field.Name})
+                        ?.ToArray() ?? Enumerable.Empty<PropertyVm>(),
+
             };
 
             if (form.Method != "get" && form.Method != "post")
@@ -277,5 +310,77 @@ namespace SirenToHtmlClientProxy
             }
             return form;
         }
+
+        string SplitContainer(string left, string right)
+        {
+            return
+                $@"
+<div class=""split-container"">
+  <div class=""split-item split-left"">
+     {left}
+  </div>
+  <div class=""split-item split-right"">
+     {right}
+  </div>
+</div>
+<style>
+
+.split-container {{
+  -webkit-box-orient: horizontal;
+  -webkit-box-direction: normal;
+  -webkit-flex-direction: row;
+  -ms-flex-direction: row;
+  flex-direction: row;
+  display: -webkit-box;
+  display: -webkit-flex;
+  display: -ms-flexbox;
+  display: flex;
+}}
+
+.split-item {{
+  
+  
+  display: -webkit-box;
+  display: -webkit-flex;
+  display: -ms-flexbox;
+  display: flex;
+  -webkit-box-orient: vertical;
+  -webkit-box-direction: normal;
+  -webkit-flex-direction: column;
+  -ms-flex-direction: column;
+  flex-direction: column;
+  
+  
+  width: 50%;
+  padding: 3em 5em 6em 5em;
+}}
+ 
+.request{{
+  background-color: aliceblue;  
+}}
+
+.response{{
+  background-color: lightgrey;
+}}
+
+.response.status200{{
+  background-color: f5fff0
+}}
+
+.entity, .subentity {{
+    background-color: rgba(220, 220, 220, 0.1);
+    border: solid 1px rgba(220, 220, 220, 0.2);
+    padding: 10px 10px;
+    -webkit-border-radius: 5px;
+    -moz-border-radius: 5px;
+    border-radius: 5px;
+}}
+
+</style>
+";
+        }
+
+       
     }
+
 }
