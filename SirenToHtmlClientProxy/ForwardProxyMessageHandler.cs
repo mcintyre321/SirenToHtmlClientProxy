@@ -168,13 +168,12 @@ namespace SirenToHtmlClientProxy
             }
 
             list.AddRange(entity.Links?.Select(x => BuildPropertyVmFromLink(x).Render(new RazorTemplateHtmlHelper()).ToString()) ?? new List<string>());
-           
-            list.AddRange(entity.Entities?.Select(e => BuildPropertyVmFromSubEntity(e, depth++))
+            depth++;
+            list.AddRange(entity.Entities?.Select(e => BuildPropertyVmFromSubEntity(e, depth))
                 .Select(entityPropertiesHtml => string.Join(Environment.NewLine, entityPropertiesHtml))
                 .Select(entityHtml => CsQuery.CQ.Create("<div>").Html(entityHtml).AddClass("subentity").AddClass("depth" + depth).Render())
-                .ToList() ?? new List<string>())
-                
-            ;
+                .ToList() ?? new List<string>());
+            depth--;
             ;
             entity.Properties?.Properties().Select(PropertyVmFromJToken).ToList().ForEach(p => list.Add(p.Render(new RazorTemplateHtmlHelper()).ToString()));
             entity.Actions?.Select(BuildFormVmFromAction).ToList().ForEach(x => list.Add(x.Render(new RazorTemplateHtmlHelper()).ToString()));
@@ -191,14 +190,7 @@ namespace SirenToHtmlClientProxy
             {
                 if (embedded.Title != null)
                 {
-                    var propertyVm = new PropertyVm(typeof(XElement), "title")
-                    {
-                        Value = new XElement("h" + depth, embedded.Title),
-                        Readonly = true,
-                        DisplayName = "Title"
-                    };
-
-                    list.Add(propertyVm.Render(new RazorTemplateHtmlHelper()).ToString());
+                    list.Add($"<h{depth}>{embedded.Title}</h{depth}>");
                 }
 
                 embedded.Links?.Select(BuildPropertyVmFromLink).ToList().ForEach(x => list.Add(x.Render(new RazorTemplateHtmlHelper()).ToString()));
@@ -209,7 +201,8 @@ namespace SirenToHtmlClientProxy
                 embedded.Actions?.Select(BuildFormVmFromAction).ToList().ForEach(x => list.Add(x.Render(new RazorTemplateHtmlHelper()).ToString()));
 
 
-                list.AddRange(embedded.Entities?.Select(e1 => BuildPropertyVmFromSubEntity(e1, depth++))
+                depth++;
+                list.AddRange(embedded.Entities?.Select(e1 => BuildPropertyVmFromSubEntity(e1, depth))
                     .Select(entityPropertiesHtml => string.Join(Environment.NewLine, entityPropertiesHtml))
                     .Select(
                         entityHtml =>
@@ -219,7 +212,7 @@ namespace SirenToHtmlClientProxy
                                 .AddClass("depth" + depth)
                                 .Render())
                     .ToList() ?? new List<string>());
-
+                depth--;
                 return list.AsEnumerable();
             }
             var linked = (SubEntity.Linked) e;
